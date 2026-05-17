@@ -1,0 +1,36 @@
+# PyTorch stack
+torch>=2.4.0
+torchvision>=0.19.0
+torchaudio>=2.4.0
+
+# Diffusion / transformers
+diffusers>=0.33.0
+transformers>=4.45.0
+accelerate>=1.0.0
+safetensors>=0.4.0
+huggingface-hub>=0.26.0
+sentencepiece>=0.2.0
+ftfy>=6.2.0
+einops>=0.8.0
+
+# Image / video IO
+Pillow>=10.4.0
+numpy>=1.26.0
+scipy>=1.11.0
+imageio>=2.34.0
+imageio-ffmpeg>=0.5.0
+
+# Media post-processing
+moviepy>=2.0.0
+
+# Audio generation (AudioGen)
+audiocraft @ git+https://github.com/facebookresearch/audiocraft.git
+
+# API server
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12
+pydantic>=2.9.0
+
+# Optional tunnel helper for exposing the local GPU server
+pyngrok>=7.2.0

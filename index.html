@@ -33,16 +33,61 @@
         inset 0 0 50px rgba(139, 92, 246, 0.06);
     }
     [x-cloak] { display: none !important; }
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateY(12px) scale(0.96); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .toast-enter { animation: toast-in 0.35s ease-out forwards; }
+    @keyframes overlay-pulse {
+      0%, 100% { opacity: 0.45; }
+      50% { opacity: 0.85; }
+    }
+    .overlay-pulse { animation: overlay-pulse 2s ease-in-out infinite; }
   </style>
 </head>
-<body class="min-h-screen text-slate-100 antialiased">
+<body class="min-h-screen text-slate-100 antialiased" x-data="aiHub()" x-init="init()">
   <div class="pointer-events-none fixed inset-0 grid-glow opacity-50" aria-hidden="true"></div>
 
+  <!-- Toast notifications -->
+  <div class="pointer-events-none fixed right-4 top-4 z-[100] flex w-full max-w-sm flex-col gap-3 sm:right-6 sm:top-6">
+    <template x-for="toast in toasts" :key="toast.id">
+      <div
+        role="alert"
+        class="toast-enter pointer-events-auto rounded-xl border px-4 py-3 shadow-2xl backdrop-blur-md"
+        :class="toast.type === 'error'
+          ? 'border-red-500/50 bg-red-950/90 text-red-100'
+          : toast.type === 'success'
+            ? 'border-emerald-500/50 bg-emerald-950/90 text-emerald-100'
+            : 'border-cyan-500/50 bg-slate-900/95 text-cyan-100'"
+      >
+        <p class="font-display text-xs uppercase tracking-wider" x-text="toast.title"></p>
+        <p class="mt-1 text-sm leading-snug" x-text="toast.message"></p>
+      </div>
+    </template>
+  </div>
+
+  <!-- Full-screen GPU processing overlay -->
   <div
-    x-data="aiHub()"
-    x-init="init()"
-    class="relative mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:py-12"
+    x-show="isBusy"
+    x-cloak
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm"
   >
+    <div class="panel-glow mx-4 max-w-md rounded-2xl border border-cyan-500/30 bg-slate-950/95 p-8 text-center shadow-[0_0_60px_rgba(0,245,255,0.15)]">
+      <div class="relative mx-auto mb-6 h-24 w-24">
+        <div class="overlay-pulse absolute inset-0 rounded-full bg-cyan-500/10"></div>
+        <div class="absolute inset-0 animate-spin rounded-full border-[3px] border-cyan-500/20 border-t-cyan-300 border-r-fuchsia-500"></div>
+        <div class="absolute inset-3 rounded-full border border-violet-500/30"></div>
+      </div>
+      <p class="font-display text-sm uppercase tracking-widest text-cyan-200" x-text="statusLabel"></p>
+      <p class="mt-3 text-sm text-slate-400">Your local GPU is generating media. This may take several minutes.</p>
+      <div class="mt-6 h-2 overflow-hidden rounded-full bg-slate-800">
+        <div class="h-full w-full origin-left animate-pulse rounded-full bg-gradient-to-r from-cyan-400 via-fuchsia-500 to-violet-500"></div>
+      </div>
+      <p class="mt-4 truncate text-xs text-slate-500" x-show="taskId" x-text="'Task: ' + taskId"></p>
+    </div>
+  </div>
+
+  <main class="relative mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:py-12">
     <!-- Header -->
     <header class="mb-8 text-center sm:mb-10">
       <p class="font-display text-xs uppercase tracking-[0.4em] text-cyan-300/80">Neural Production Suite</p>
@@ -118,10 +163,14 @@
           type="button"
           @click="startGeneration()"
           :disabled="isBusy || !canSubmit"
-          class="font-display mt-6 w-full rounded-xl bg-gradient-to-r from-cyan-500 to-fuchsia-600 py-3.5 text-sm font-semibold uppercase tracking-wider text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+          class="font-display relative mt-6 flex w-full items-center justify-center gap-3 rounded-xl bg-gradient-to-r from-cyan-500 to-fuchsia-600 py-3.5 text-sm font-semibold uppercase tracking-wider text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
         >
+          <span
+            x-show="isBusy"
+            class="inline-block h-5 w-5 animate-spin rounded-full border-2 border-black/20 border-t-black"
+          ></span>
           <span x-show="!isBusy" x-text="activeTab.cta"></span>
-          <span x-show="isBusy">Processing on GPU...</span>
+          <span x-show="isBusy">GPU Processing...</span>
         </button>
 
         <p x-show="taskId" class="mt-3 truncate text-xs text-slate-500" x-text="'Task ID: ' + taskId"></p>
@@ -177,15 +226,53 @@
     <footer class="mt-10 text-center text-xs text-slate-600">
       Frontend · Vercel &nbsp;|&nbsp; GPU Engine · FastAPI + ngrok &nbsp;|&nbsp; Models · DreamShaper · Wan 2.1 · AudioGen
     </footer>
-  </div>
+  </main>
 
   <script>
     // =============================================================================
-    // *** REPLACE THIS URL WITH YOUR PUBLIC NGROK (OR TUNNEL) HTTPS ADDRESS ***
-    // Example: const BACKEND_URL = 'https://a1b2c3d4.ngrok-free.app';
+    // Public ngrok tunnel to your local FastAPI server (port 8000).
+    // Update this if your ngrok subdomain changes after restart.
     // =============================================================================
-   
-    const BACKEND_URL = 'https://ngrok-free.dev';
+    const BACKEND_URL = 'https://procreate-vertebrae-spinout.ngrok-free.dev';
+
+    /** Build a safe absolute API URL (no double slashes, no wrong host). */
+    function apiUrl(path) {
+      const base = BACKEND_URL.replace(/\/+$/, '');
+      const route = path.startsWith('/') ? path : `/${path}`;
+      return `${base}${route}`;
+    }
+
+    /** Headers required for ngrok free tier + JSON APIs. */
+    function apiHeaders(extra = {}) {
+      return {
+        'ngrok-skip-browser-warning': 'true',
+        Accept: 'application/json',
+        ...extra,
+      };
+    }
+
+    /** fetch with timeout; surfaces network/CORS errors clearly. */
+    async function fetchWithTimeout(url, options = {}, timeoutMs = 60000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        return response;
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s. The GPU may still be working — check the server logs.`);
+        }
+        if (err instanceof TypeError) {
+          throw new Error(
+            'Cannot reach the GPU server. Verify ngrok is running, BACKEND_URL is correct, and CORS is enabled on gpu_server.py.'
+          );
+        }
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
     function aiHub() {
       return {
         mode: 'text-to-image',
@@ -232,6 +319,8 @@
         resultKind: null,
         errorMessage: null,
         pollTimer: null,
+        toasts: [],
+        toastCounter: 0,
 
         get activeTab() {
           return this.tabs.find((t) => t.id === this.mode) || this.tabs[0];
@@ -243,7 +332,30 @@
           return true;
         },
 
-        init() {},
+        init() {
+          // Optional: quick health check on load (non-blocking).
+          fetchWithTimeout(apiUrl('/api/health'), { headers: apiHeaders() }, 8000)
+            .then((r) => {
+              if (!r.ok) this.showToast('warning', 'GPU Server', 'Backend responded with an error. Generation may still work.');
+            })
+            .catch(() => {
+              this.showToast('warning', 'GPU Server Offline', 'Cannot reach your ngrok tunnel. Start uvicorn and ngrok before generating.');
+            });
+        },
+
+        showToast(type, title, message, durationMs = 6000) {
+          const id = ++this.toastCounter;
+          this.toasts.push({ id, type, title, message });
+          setTimeout(() => {
+            this.toasts = this.toasts.filter((t) => t.id !== id);
+          }, durationMs);
+        },
+
+        showError(message) {
+          this.errorMessage = message;
+          this.showToast('error', 'Generation Failed', message, 9000);
+          console.error('[AI Hub]', message);
+        },
 
         setMode(id) {
           if (this.isBusy) return;
@@ -282,6 +394,7 @@
           this.statusLabel = 'Submitting to GPU server...';
 
           const tab = this.activeTab;
+          const url = apiUrl(tab.endpoint);
 
           try {
             let response;
@@ -290,16 +403,17 @@
               const form = new FormData();
               form.append('prompt', this.prompt.trim());
               form.append('image', this.imageFile);
-              response = await fetch(`${BACKEND_URL}${tab.endpoint}`, {
+              response = await fetchWithTimeout(url, {
                 method: 'POST',
+                headers: apiHeaders(),
                 body: form,
-              });
+              }, 120000);
             } else {
-              response = await fetch(`${BACKEND_URL}${tab.endpoint}`, {
+              response = await fetchWithTimeout(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: apiHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ prompt: this.prompt.trim() }),
-              });
+              }, 120000);
             }
 
             if (!response.ok) {
@@ -311,10 +425,11 @@
             const data = await response.json();
             this.taskId = data.task_id;
             this.statusLabel = 'Queued — waiting for GPU...';
+            this.showToast('info', 'Job Queued', 'Your request is in the GPU queue. Processing may take several minutes.');
             this.startPolling(tab.resultKind);
           } catch (err) {
             this.isBusy = false;
-            this.errorMessage = err.message || 'Failed to start generation.';
+            this.showError(err.message || 'Failed to start generation.');
           }
         },
 
@@ -335,7 +450,11 @@
           if (!this.taskId) return;
 
           try {
-            const response = await fetch(`${BACKEND_URL}/api/status/${this.taskId}`);
+            const response = await fetchWithTimeout(
+              apiUrl(`/api/status/${this.taskId}`),
+              { headers: apiHeaders() },
+              20000
+            );
             if (!response.ok) throw new Error(`Status check failed (${response.status})`);
 
             const data = await response.json();
@@ -347,17 +466,18 @@
               this.isBusy = false;
               this.statusLabel = 'Complete';
               const path = data.file_url || '';
-              this.resultUrl = path.startsWith('http') ? path : `${BACKEND_URL}${path}`;
+              this.resultUrl = path.startsWith('http') ? path : apiUrl(path);
               this.resultKind = kind;
+              this.showToast('success', 'Complete', kind === 'image' ? 'Your image is ready.' : 'Your video is ready.');
             } else if (data.status === 'failed') {
               this.stopPolling();
               this.isBusy = false;
-              this.errorMessage = data.error || 'Generation failed on the GPU server.';
+              this.showError(data.error || 'Generation failed on the GPU server.');
             }
           } catch (err) {
             this.stopPolling();
             this.isBusy = false;
-            this.errorMessage = err.message || 'Lost connection to the GPU server.';
+            this.showError(err.message || 'Lost connection to the GPU server.');
           }
         },
       };
